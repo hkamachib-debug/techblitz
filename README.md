@@ -152,4 +152,4 @@ render.yaml          deploy blueprint
 
 ## Credits
 
-Built by Harshitha Kamachi Balasubramaniam for TECH BLITZ, rebuilt so anyone can take the case. A fan-made tribute event inspired by *The Mentalist*: character names and images belong to their respective owners and are used non-commercially. Puzzle set by the TECH BLITZ organizing team. Fonts: Bebas Neue, Inter, IBM Plex Mono (SIL Open Font License).
+Co-built by Harshitha Kamachi Balasubramaniam for TECH BLITZ, rebuilt so anyone can take the case. A fan-made tribute event inspired by *The Mentalist*: character names and images belong to their respective owners and are used non-commercially. Puzzle set by the TECH BLITZ organizing team. Fonts: Bebas Neue, Inter, IBM Plex Mono (SIL Open Font License).
