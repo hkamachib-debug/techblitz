@@ -1,0 +1,17 @@
+# One-click deploy on Render (render.com → New → Blueprint → pick this repo).
+services:
+  - type: web
+    name: tech-blitz
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.0
+      - key: TB_ADMIN_KEY
+        generateValue: true          # Render makes a random key; copy it from the dashboard
+      - key: TB_TIME_SCALE
+        value: "0.1"                 # demo speed: the whole event plays in about 7 minutes
