@@ -1,6 +1,6 @@
 # TECH BLITZ — The Jane Protocol
 
-A timed, solo **technical murder-mystery** built for a university tech event. Players act as consultant Patrick Jane, solve eight puzzles across four detectives' cases (logic, ciphers, number systems, C tracing) inside a server-run clock, then name the killer of the Frostpeak Lodge case.
+A timed, solo **technical murder-mystery** built for a university tech event. Players act as consultant Patrick Jane, solve eight puzzles across four detectives' cases (logic, ciphers, number systems, C tracing) inside a server-run clock, then name the killer of the Frostpeak Lodge case. The event platform was gated by register number for fair play during the competition. This public edition keeps the same rules (server-owned clock, one locked answer per puzzle, hidden answer key) so the full case can be played without registration.
 
 ![Landing page](docs/landing.webp)
 
@@ -152,4 +152,4 @@ render.yaml          deploy blueprint
 
 ## Credits
 
-Built by Harshitha Kamachi Balasubramaniam for TECH BLITZ. A fan-made tribute event inspired by *The Mentalist*: character names and images belong to their respective owners and are used non-commercially. Puzzle set by the TECH BLITZ organizing team. Fonts: Bebas Neue, Inter, IBM Plex Mono (SIL Open Font License).
+Built by Harshitha Kamachi Balasubramaniam for TECH BLITZ, rebuilt so anyone can take the case. A fan-made tribute event inspired by *The Mentalist*: character names and images belong to their respective owners and are used non-commercially. Puzzle set by the TECH BLITZ organizing team. Fonts: Bebas Neue, Inter, IBM Plex Mono (SIL Open Font License).
