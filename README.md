@@ -11,6 +11,9 @@ A timed, solo **technical murder-mystery** built for a university tech event. Pl
 **Stack:** vanilla JavaScript single-page app (hash router, no framework) · Python **FastAPI** · **SQLite** · pytest · Playwright · deployable to Render.
 
 ---
+## Watch it in 60 seconds
+
+Click **Watch a 60-second demo** on the landing page. The server starts a throwaway demo session whose clock runs the whole 70-minute event in about a minute, and an autopilot plays it through the real interface: it reads the case file, waits for each detective to arrive, types answers at human speed, uses a hint, accuses, and opens the revealed results, with captions explaining each step. Demo sessions never appear on the leaderboard, and a visitor's own session is untouched.
 
 ## Why it's interesting
 
@@ -23,6 +26,7 @@ Running a live competition in a shared PC lab means the browser can't be trusted
 | Double submissions / race conditions | One answer per puzzle is enforced by a database primary key. Two simultaneous submits → one `201`, one `409`. |
 | Refreshing to restart the clock | Starting the clock is idempotent (`UPDATE … WHERE t0 IS NULL`). The session token is kept in `localStorage`, and state is rehydrated from `GET /api/state` on load. |
 | Correctness hints mid-event | Responses never include right/wrong. Results are sealed until an organizer releases them with an admin key. |
+| The demo needs answers | Only demo sessions may call `/api/demo/answer/{id}`, and only once that puzzle has unlocked for them. Real players get `403`, so the key still never reaches a real player's browser. |
 | Hint abuse | Hints unlock 5 minutes after the server first served that puzzle, are single-use, and add a 60 s penalty to ranking. |
 
 ## Architecture
@@ -69,7 +73,7 @@ sequenceDiagram
 - **Parts:** Part B opens when Part A is **submitted** (right or wrong).
 - **Answers:** one submission per part, locked immediately. Checking is case-insensitive and whitespace-tolerant. Times like `09:43`, `9.43` and `943` compare equal.
 - **Accusation:** opens when all four cases are closed (both parts submitted or time up). One choice, final.
-- **Ranking (configurable in `game.rank_key`):** correct accusation → cases cleared (both parts right) → correct answers → lowest total time (time from each case opening to each submission, plus hint penalties).
+- **Ranking (configurable in `game.rank_key`):** correct accusation → cases cleared (both parts right) → correct answers → lowest total time (for each case, the time from it opening to its last answer, plus hint penalties)
 
 ## API
 
@@ -85,6 +89,8 @@ sequenceDiagram
 | GET | `/api/results` | Own rank and outcome, after release |
 | POST | `/api/admin/release` | Organizer: release or re-seal results (`X-Admin-Key`) |
 | GET | `/api/admin/leaderboard` | Organizer: ranked board (`X-Admin-Key`) |
+| POST | `/api/session/demo` | Start a 60-second demo session (fast clock, off the leaderboard) |
+| GET | `/api/demo/answer/{id}` | The autopilot's answer for an unlocked puzzle (demo sessions only) |
 | GET | `/api/docs` | Interactive OpenAPI docs |
 
 ## Run locally
@@ -112,6 +118,7 @@ curl localhost:8000/api/admin/leaderboard -H "X-Admin-Key: secret"
 | `TB_ADMIN_KEY` | *(unset → admin disabled)* | Key for the organizer endpoints |
 | `TB_TIME_SCALE` | `1.0` | Multiplies every timer (demo speed) |
 | `TB_DB_PATH` | `backend/tech_blitz.db` | SQLite file |
+| `TB_DEMO_SCALE` | `0.014` | Clock speed of the 60-second demo (70 minutes × 0.014 ≈ 59 s) |
 
 ## Tests
 
@@ -119,11 +126,11 @@ curl localhost:8000/api/admin/leaderboard -H "X-Admin-Key: secret"
 cd backend
 pip install -r requirements-dev.txt
 playwright install chromium
-pytest            # 22 tests: API rules + one full browser run (~70 s)
+pytest            #28 tests: API rules + two browser runs (~2.5 min)`
 ```
 
-- `tests/test_api.py` (21 tests) uses an **injected clock**, so time-based rules (windows, late submissions, hint delay) are tested instantly. It covers normalization, unlock order, lock-once (including 8 simultaneous submits), player isolation, hints, accusation, sealed results, ranking, and answer-key leak checks.
-- `tests/test_e2e.py` starts a real server at 50× speed and drives Chromium through the whole event: check-in, locked cases, hint, submit, **reload persistence**, every puzzle, accusation, admin release and results. It watches every API response for answer-key leaks.
+- `tests/test_api.py` (26 tests) uses an **injected clock**, so time-based rules (windows, late submissions, hint delay) are tested instantly. It covers normalization, unlock order, lock-once (including 8 simultaneous submits), player isolation, hints, accusation, ssealed results, ranking and time scoring, demo sessions, upgrading an older database, and answer-key leak checks.
+- `tests/test_e2e.py` starts a real server at 50× speed and drives Chromium through the whole event: check-in, locked cases, hint, submit, **reload persistence**, every puzzle, accusation, admin release and results. It watches every API response for answer-key leaks. A second run clicks the demo button and checks it finishes in about a minute, never stores the demo session, and stays off the leaderboard.
 
 ## Deploy (Render, free)
 
@@ -151,5 +158,6 @@ render.yaml          deploy blueprint
 ```
 
 ## Credits
+**Disclaimer:** TECH BLITZ is a non-commercial, fan-made student event inspired by *The Mentalist*. *The Mentalist*, its characters, names and images are the property of Warner Bros. Television and CBS. This project is not affiliated with, endorsed by, or sponsored by them. Character images are used for non-commercial, educational purposes only, and will be removed on request.
 
 Co-built by Harshitha Kamachi Balasubramaniam for TECH BLITZ, rebuilt so anyone can take the case. A fan-made tribute event inspired by *The Mentalist*: character names and images belong to their respective owners and are used non-commercially. Puzzle set by the TECH BLITZ organizing team. Fonts: Bebas Neue, Inter, IBM Plex Mono (SIL Open Font License).

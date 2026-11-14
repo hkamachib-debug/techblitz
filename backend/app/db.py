@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS participants (
     name        TEXT NOT NULL,
     token_hash  TEXT NOT NULL UNIQUE,
     created_at  REAL NOT NULL,
-    t0          REAL                      -- case clock start (epoch seconds), set once
+    t0          REAL,                     -- case clock start (epoch seconds), set once
+    is_demo     INTEGER NOT NULL DEFAULT 0,
+    time_scale  REAL                      -- per-player clock speed (demo sessions); NULL = server default
 );
 CREATE TABLE IF NOT EXISTS puzzle_opens (
     participant_id TEXT NOT NULL REFERENCES participants(id),
@@ -48,6 +50,12 @@ def init_db(path: str) -> None:
     with sqlite3.connect(path) as con:
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
+        # Upgrade databases created before demo sessions existed.
+        cols = {r[1] for r in con.execute("PRAGMA table_info(participants)")}
+        if "is_demo" not in cols:
+            con.execute("ALTER TABLE participants ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
+        if "time_scale" not in cols:
+            con.execute("ALTER TABLE participants ADD COLUMN time_scale REAL")
 
 
 @contextmanager

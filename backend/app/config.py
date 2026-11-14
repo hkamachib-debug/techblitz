@@ -12,6 +12,7 @@ class Settings:
     db_path: str
     admin_key: str | None
     time_scale: float          # 1.0 = real event timing; 0.1 = a 70-minute event plays in 7 minutes
+    demo_scale: float          # clock speed for the 60-second demo (0.014 = 70 minutes in ~59 seconds)
     reading_min: float
     section_min: dict
     hint_delay_min: float
@@ -25,6 +26,7 @@ def load_settings() -> Settings:
         db_path=os.getenv("TB_DB_PATH", str(BACKEND_DIR / "tech_blitz.db")),
         admin_key=os.getenv("TB_ADMIN_KEY") or None,
         time_scale=float(os.getenv("TB_TIME_SCALE", "1.0")),
+        demo_scale=float(os.getenv("TB_DEMO_SCALE", "0.014")),
         reading_min=5,
         # Cases open in this order, back to back, after the reading period.
         section_min={"cho": 15, "rigsby": 15, "van-pelt": 15, "lisbon": 20},

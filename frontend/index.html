@@ -144,6 +144,7 @@ p{ margin:0 0 1em; max-width:66ch; }
 .det-col h3{ font-family:var(--display); font-weight:400; font-size:3rem; line-height:1; letter-spacing:.03em; position:relative; }
 .det-col p{ position:relative; color:var(--slate); margin:.4rem 0 0; min-height:3.2em; }
 .det-col .idx{ position:relative; color:var(--amber); margin-bottom:.4rem; }
+.foot .disclaimer{ flex-basis:100%; font-size:.78rem; }
 .foot{ display:flex; justify-content:space-between; flex-wrap:wrap; gap:1rem; padding:2rem clamp(1.2rem,4vw,3rem); border-top:1px solid var(--line); color:var(--slate); font-size:.85rem; }
 
 /* ============ PORTRAITS (shared) ============ */
@@ -655,6 +656,18 @@ body[data-tex="epilogue"]{ --grain:.075; --scratch:.06; background:#060607; }
 .verdict-chip{ display:inline-block; margin-top:.4rem; font-size:.74rem; font-weight:600; padding:.1rem .45rem; border:1px solid currentColor; }
 .verdict-chip.ok{ color:var(--steel-ink); } .verdict-chip.no{ color:var(--red-ink); }
 
+/* ============ 60-SECOND DEMO ============ */
+#demo-bar{ position:fixed; z-index:60; left:50%; bottom:calc(1rem + env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
+  width:min(760px, calc(100% - 2rem)); background:rgba(21,22,25,.97); border:1px solid var(--amber); box-shadow:0 12px 40px rgba(0,0,0,.55); }
+.db-row{ display:flex; align-items:center; gap:1rem; flex-wrap:wrap; padding:.8rem 1rem; }
+.db-tag{ color:var(--obsidian); background:var(--amber); font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; padding:.15rem .5rem; }
+.db-cap{ flex:1 1 280px; margin:0; font-size:.95rem; line-height:1.45; color:var(--paper); }
+.db-actions{ display:flex; gap:.5rem; flex-wrap:wrap; }
+.db-actions .btn{ min-height:38px; padding:.45rem .9rem; font-size:.78rem; }
+.db-meter{ height:3px; background:var(--line); } .db-meter i{ display:block; height:100%; width:0; background:var(--amber); transition:width .6s linear; }
+body.demo-on .main, body.demo-on .checkin{ padding-bottom:10rem; }
+@media (prefers-reduced-motion: reduce){ .db-meter i{ transition:none; } }
+
 /* ============ RESPONSIVE ============ */
 @media (max-width:1180px){
   .ws{ grid-template-columns:minmax(0,1fr) 280px; }
@@ -691,6 +704,8 @@ body[data-tex="epilogue"]{ --grain:.075; --scratch:.06; background:#060607; }
   .closed .stampbig{ position:static; transform:rotate(-4deg); display:inline-block; margin-top:1.4rem; }
 }
 @media (max-width:600px){
+  .ticks{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .tick .status{ white-space:normal; }
   .topbar nav{ display:none; }
   .board, .pick{ grid-template-columns:1fr 1fr; }
   .crow{ grid-template-columns:2rem minmax(0,1fr); }
@@ -850,7 +865,9 @@ const API = {
   submit(p){ return API.call('POST', '/api/submissions', { puzzle_id:p.puzzle_id, submitted_answer:p.submitted_answer }); },
   requestHint(p){ return API.call('POST', '/api/hints', { puzzle_id:p.puzzle_id }); },
   accuse(p){ return API.call('POST', '/api/accusation', { suspect_id:p.suspect_id }); },
-  results(){ return API.call('GET', '/api/results'); }
+  results(){ return API.call('GET', '/api/results'); },
+  demoSession(){ return API.call('POST', '/api/session/demo'); },
+  demoAnswer(id){ return API.call('GET', '/api/demo/answer/' + encodeURIComponent(id)); }
 };
 const store = {   // the session token survives reloads; storage can be blocked, so every access is guarded
   get(){ try { return localStorage.getItem('tb_token'); } catch { return null; } },
@@ -1005,6 +1022,7 @@ function landing(){
         <p class="hero-support">${e.support}</p>
         <div class="hero-cta">
           <a class="btn btn-red" href="#/briefing">${e.ctaPrimary}</a>
+          <button class="btn btn-ghost demo-btn" type="button">Watch a 60-second demo</button>
           <a class="link" href="#/suspects">${e.ctaSecondary}</a>
         </div>
       </div>
@@ -1045,7 +1063,7 @@ function landing(){
       </div>
     </section>
   </main>
-  <footer class="foot"><span class="wordmark" style="font-size:1.2rem">TECH <i>/</i> BLITZ</span><span>${e.subtitle}. A fan-made technical investigation event.</span></footer>`;
+  <footer class="foot"><span class="wordmark" style="font-size:1.2rem">TECH <i>/</i> BLITZ</span><span>${e.subtitle}. A fan-made technical investigation event.</span><span class="disclaimer">Fan-made, non-commercial tribute. <i>The Mentalist</i> and its characters belong to their respective owners.</span></footer>`;
 }
 
 /* ============ APP SHELL ============ */
@@ -1545,6 +1563,7 @@ function renderSummary(){
       try {
         const r = await API.accuse({ suspect_id:S.pick });
         S.accusation = { suspect:S.pick, recorded_at:r.recorded_at * 1000 };
+        await hydrate().catch(() => {});
         location.hash = '#/results';
       } catch(e){ await hydrate().catch(() => {}); flash(e.message); }
     });
@@ -1689,7 +1708,8 @@ function checkIn(){
       <label for="ci-name">Your name</label>
       <input id="ci-name" class="input" autocomplete="name" maxlength="60" required>
       ${S.err === 'checkin' ? `<div class="err" id="ci-err" role="alert">${esc(S.errMsg || 'Type your name to check in.')}</div>` : ''}
-      <div class="actions"><button class="btn btn-red" type="submit" id="ci-go">Check in</button></div>
+      <div class="actions"><button class="btn btn-red" type="submit" id="ci-go">Check in</button>
+        <button class="btn btn-ghost demo-btn" type="button">Or watch a 60-second demo</button></div>
     </form></div></main>`;
 }
 function bindCheckIn(){
@@ -1704,6 +1724,145 @@ function bindCheckIn(){
   });
 }
 function notFound(){ return shell('', `<div class="page-head"><div><h1>File not found</h1><p>This page isn't in the case archive. Return to the investigation to continue.</p></div></div><a class="btn" href="#/investigation">Go to investigation</a>`); }
+
+/* ============ 60-SECOND DEMO ============
+   A real round on the real server, played by an autopilot that types into the same inputs and clicks the
+   same buttons a player would. The server gives the demo its own fast clock (~1 minute for the 70-minute
+   event), keeps it off the leaderboard, and hands it each answer only once that puzzle has unlocked.
+   The demo's session lives in memory only: stopping or reloading returns to the visitor's own session. */
+const DEMO = { running:false, aborted:false, typeMs:75 };
+const ABORT = new Error('demo stopped');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function pause(ms){ await sleep(ms); if(DEMO.aborted) throw ABORT; }
+async function waitFor(test, timeout = 30000){
+  const end = Date.now() + timeout;
+  for(;;){
+    if(DEMO.aborted) throw ABORT;
+    const v = test(); if(v) return v;
+    if(Date.now() > end) throw new Error('The demo lost its place.');
+    await sleep(100);
+  }
+}
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function reveal(el){ el?.scrollIntoView({ block:'center', behavior: reducedMotion() ? 'auto' : 'smooth' }); }
+async function go(hash){ if(location.hash !== hash) location.hash = hash; await pause(80); }
+async function press(sel){ const el = await waitFor(() => $(sel)); reveal(el); await pause(350); el.click(); }
+async function type(sel, text){
+  const el0 = await waitFor(() => $(sel)); reveal(el0); await pause(250);
+  for(let i = 1; i <= text.length; i++){
+    const el = $(sel); if(!el) throw new Error('The demo lost its place.');   // re-query: the page may re-render
+    el.focus(); el.value = text.slice(0, i); el.dispatchEvent(new Event('input', { bubbles:true }));
+    await pause(DEMO.typeMs);
+  }
+}
+function demoBar(){
+  let bar = document.getElementById('demo-bar');
+  if(!bar){
+    bar = document.createElement('div'); bar.id = 'demo-bar'; bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'Demo');
+    bar.innerHTML = `<div class="db-row"><span class="db-tag mono">Demo</span><p class="db-cap" aria-live="polite"></p>
+      <div class="db-actions"></div></div><div class="db-meter"><i></i></div>`;
+    document.body.appendChild(bar);
+  }
+  return bar;
+}
+function caption(text, progress){
+  const bar = demoBar(); bar.querySelector('.db-cap').textContent = text;
+  if(progress != null) bar.querySelector('.db-meter i').style.width = Math.round(progress * 100) + '%';
+  bar.querySelector('.db-actions').innerHTML = `<button type="button" class="btn btn-ghost" id="db-stop">Stop demo</button>`;
+  bar.querySelector('#db-stop').onclick = () => stopDemo('#/');
+}
+function resetSessionState(){
+  Object.assign(S, { subs:{}, opened:{}, hints:{}, content:{}, pending:{}, pendingTime:{}, accusation:null, results:null,
+    released:false, clock:null, pick:null, seen:{}, err:null, errMsg:null, flash:null, me:null });
+}
+async function stopDemo(hash){
+  DEMO.aborted = true; DEMO.running = false;
+  document.getElementById('demo-bar')?.remove(); document.body.classList.remove('demo-on');
+  if($('#dlg').open) closeDialog();
+  resetSessionState(); S.token = store.get();      // back to the visitor's own session, if they had one
+  if(S.token) await hydrate().catch(() => { S.token = null; });
+  location.hash = hash; render();
+}
+async function startDemo(){
+  if(DEMO.running) return;
+  DEMO.running = true; DEMO.aborted = false;
+  document.body.classList.add('demo-on');
+  caption('Starting a demo round on the live server…', 0);
+  resetSessionState();
+  try {
+    const r = await API.demoSession();
+    S.token = r.token;                              // memory only: never written to storage
+    await hydrate();
+    await autopilot();
+  } catch(e){
+    if(e === ABORT) return;
+    DEMO.running = false; caption(e.message || 'The demo stopped unexpectedly.', null);
+    demoBar().querySelector('.db-actions').innerHTML = `<button type="button" class="btn btn-ghost" id="db-stop">Close</button>`;
+    demoBar().querySelector('#db-stop').onclick = () => stopDemo('#/');
+  }
+}
+const told = new Set();   // explain each idea once, then keep captions short
+const say = (key, first, later) => { const t = told.has(key) ? later : first; told.add(key); return t; };
+async function autopilot(){
+  told.clear();
+  const t0 = S.clock.t0, end = S.clock.sections[S.clock.sections.length - 1].close;
+  const progress = () => Math.min(1, (now() - t0) / (end - t0 + 6000));
+  caption('A player checks in and opens the case file. Their clock starts on the server, not in the browser.', progress());
+  await go('#/briefing'); await pause(1900);
+  caption('Five minutes to read the briefing, the evidence and the suspects (sped up for this demo).', progress());
+  await go('#/evidence'); await pause(1200);
+  await go('#/suspects'); await pause(1200);
+
+  for(const d of DATA.detectives){
+    const w = win(d.id);
+    if(now() < w.open){
+      caption(say('field', `${d.name} is still in the field. Cases open on the clock, not when you finish early.`,
+        d.id === 'lisbon' ? 'Last case. Lisbon arrives when her timer says so.' : `Waiting for ${d.name}. Finishing early never skips the clock.`), progress());
+      await go('#/investigation/' + d.id);
+      await waitFor(() => now() >= w.open + 150, 60000);
+    }
+    for(const part of chOf(d.id)){
+      caption(say('read', `${d.name}, ${part.title}: read the puzzle. Its text was just fetched from the server, because it has unlocked.`,
+        `${d.name}'s case (${topicOf(part)}), ${part.title}.`), progress());
+      await go('#/challenge/' + part.id);
+      await waitFor(() => $('#ans:not([readonly])'));
+      reveal($('.prompt')); await pause(1300);
+      if(part.id === 'lisbon-a'){
+        caption('Stuck? One hint per part. It unlocks 5 minutes after opening the puzzle and adds 60 seconds to your time.', progress());
+        await waitFor(() => $('#hint:not([disabled])'), 20000);
+        await press('#hint'); await waitFor(() => $('#dlg').open); await pause(600);
+        await press('#confirm-hint'); await waitFor(() => $('.hint-text')); reveal($('.hint-text')); await pause(1800);
+      }
+      const { answer } = await API.demoAnswer(part.id);
+      caption(say('type', 'Type the answer in the expected format. Capitals don\'t matter; the server normalizes it.', 'Typing the answer…'), progress());
+      if(fmtOf(part).kind === 'time'){ const [h, m] = answer.split(':'); await type('#ans', h); await type('#ans-m', m); }
+      else await type('#ans', answer.toLowerCase());
+      await press('#submit'); await waitFor(() => $('#dlg').open); await pause(800);
+      caption(say('lock', 'Confirm. The answer locks for good, and the screen never says whether it was right.', 'Locked in. No verdict until the end.'), progress());
+      await press('#confirm-sub'); await waitFor(() => $('#rcpt')); reveal($('#rcpt')); await pause(1100);
+    }
+  }
+
+  caption('All four cases are closed. One accusation, and it\'s final.', progress());
+  await go('#/final-deduction'); await waitFor(() => $('.pick')); await pause(1200);
+  const { answer:killer } = await API.demoAnswer('accusation');
+  const pick = $(`input[name="suspect"][value="${killer}"]`); reveal(pick); await pause(400); pick.click(); await pause(1000);
+  await press('#review'); await waitFor(() => $('#dlg').open); await pause(900);
+  await press('#confirm'); await waitFor(() => location.hash === '#/results');
+  caption('At a real event the organizers release results afterwards. The demo unseals them straight away.', 1);
+  await waitFor(() => $('.reveal-line'), 15000); reveal($('.res-sealed')); await pause(1500);
+
+  DEMO.running = false;
+  const bar = demoBar();
+  bar.querySelector('.db-cap').textContent = 'That\'s the whole case, start to finish. Your turn?';
+  bar.querySelector('.db-actions').innerHTML = `<button type="button" class="btn btn-red" id="db-play">Play it yourself</button>
+    <button type="button" class="btn btn-ghost" id="db-again">Watch again</button>
+    <button type="button" class="btn btn-ghost" id="db-exit">Close</button>`;
+  bar.querySelector('#db-play').onclick = () => stopDemo('#/briefing');
+  bar.querySelector('#db-again').onclick = async () => { await stopDemo('#/'); startDemo(); };
+  bar.querySelector('#db-exit').onclick = () => stopDemo('#/results');
+  bar.querySelector('#db-play').focus();
+}
 
 /* ============ DIALOG ============ */
 let dlgOpener = null;
@@ -1771,6 +1930,7 @@ setInterval(() => {
   }
 }, 1000);
 function bindShell(){
+  document.querySelectorAll('.demo-btn').forEach(b => b.addEventListener('click', startDemo));
   $('#flash-x')?.addEventListener('click', () => { S.flash = null; render(); });
   $('#menu-btn')?.addEventListener('click', e => { const s = $('#side'), open = !s.classList.contains('open'); s.classList.toggle('open', open); e.target.setAttribute('aria-expanded', open); e.target.textContent = open?'Close':'Menu'; });
   document.querySelectorAll('[data-suspect]').forEach(b => b.addEventListener('click', () => openSuspect(b.dataset.suspect, b)));

@@ -205,3 +205,70 @@ def test_simultaneous_submits_record_exactly_one(env):
     with ThreadPoolExecutor(8) as pool:
         codes = sorted(pool.map(lambda a: submit(client, h, "cho-a", a).status_code, [f"9:4{i}" for i in range(8)]))
     assert codes.count(201) == 1 and codes.count(409) == 7
+
+
+# ---------------------------------------------------------------- 60-second demo
+def demo(client):
+    r = client.post("/api/session/demo")
+    assert r.status_code == 201
+    return {"Authorization": "Bearer " + r.json()["token"]}
+
+
+def test_demo_runs_on_its_own_fast_clock(env):
+    client, _ = env
+    s = client.get("/api/state", headers=demo(client)).json()
+    c = s["clock"]
+    total = c["sections"][-1]["close"] - c["t0"]
+    assert s["participant"]["demo"] is True
+    assert 50 <= total <= 70        # the whole 70-minute event in about a minute
+
+
+def test_demo_answers_only_for_demo_sessions_and_only_once_unlocked(env):
+    client, clock = env
+    real = started(client, clock)
+    assert client.get("/api/demo/answer/cho-a", headers=real).status_code == 403   # real players: never
+    d = demo(client)
+    assert client.get("/api/demo/answer/cho-a", headers=d).status_code == 423      # still reading
+    clock.t += 5                                                                    # past the demo's reading time
+    assert client.get("/api/demo/answer/cho-a", headers=d).json()["answer"] == "9:43"
+    assert client.get("/api/demo/answer/rigsby-a", headers=d).status_code == 423   # not unlocked yet
+    assert client.get("/api/demo/answer/accusation", headers=d).status_code == 423
+
+
+def test_demo_reveals_its_own_result_but_stays_off_the_leaderboard(env):
+    client, clock = env
+    real = started(client, clock, "Real Player")
+    d = demo(client)
+    clock.t += 70                   # the demo's whole event has elapsed
+    assert client.post("/api/accusation", headers=d, json={"suspect_id": "sam"}).status_code == 201
+    r = client.get("/api/results", headers=d)
+    assert r.status_code == 200 and r.json()["you"]["accusation_correct"] == 1
+    assert client.get("/api/results", headers=real).status_code == 423              # real results still sealed
+    client.post("/api/admin/release", headers={"X-Admin-Key": ADMIN}, json={"released": True})
+    board = client.get("/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN}).json()["players"]
+    assert [p["name"] for p in board] == ["Real Player"]
+
+
+def test_existing_database_is_upgraded_in_place(tmp_path):
+    """A database created by the earlier version (no demo columns) keeps its players and gains demo support."""
+    import sqlite3
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as con:
+        con.execute("CREATE TABLE participants (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,"
+                    " created_at REAL NOT NULL, t0 REAL)")
+        con.execute("INSERT INTO participants VALUES ('P-OLD','Old Player','h',0,NULL)")
+    client = TestClient(create_app(replace(load_settings(), db_path=str(path), admin_key=ADMIN), clock=Clock()))
+    assert client.post("/api/session/demo").status_code == 201
+    with sqlite3.connect(path) as con:
+        assert con.execute("SELECT name, is_demo FROM participants WHERE id='P-OLD'").fetchone() == ("Old Player", 0)
+
+
+def test_total_time_counts_each_case_once(env):
+    """Part A at 2 min and Part B at 5 min into Cho's case is 5 minutes, not 2 + 5 = 7."""
+    client, clock = env
+    h = started(client, clock)
+    clock.advance(2); submit(client, h, "cho-a", "9:43")
+    clock.advance(3); submit(client, h, "cho-b", "workshop")
+    client.post("/api/admin/release", headers={"X-Admin-Key": ADMIN}, json={"released": True})
+    board = client.get("/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN}).json()["players"]
+    assert board[0]["total_time_s"] == 5 * 60

@@ -75,10 +75,13 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
         if not cfg.admin_key or not secrets.compare_digest(x_admin_key, cfg.admin_key):
             raise HTTPException(403, "Admin key required")
 
+    def scale(p) -> float:
+        return p["time_scale"] or cfg.time_scale
+
     def wins(p):
         if p["t0"] is None:
             return None
-        return game.windows(p["t0"], cfg.reading_min, cfg.section_min, cfg.time_scale)
+        return game.windows(p["t0"], cfg.reading_min, cfg.section_min, scale(p))
 
     def submitted_ids(con, pid) -> set[str]:
         return {r[0] for r in con.execute("SELECT puzzle_id FROM submissions WHERE participant_id=?", (pid,))}
@@ -86,6 +89,12 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
     def released(con) -> bool:
         r = con.execute("SELECT value FROM settings WHERE key='results_released'").fetchone()
         return bool(r and r[0] == "1")
+
+    def released_for(p, con) -> bool:
+        # A demo reveals its own result as soon as it accuses; real players wait for the organizers.
+        if p["is_demo"]:
+            return con.execute("SELECT 1 FROM accusations WHERE participant_id=?", (p["id"],)).fetchone() is not None
+        return released(con)
 
     def gate(p, con, puzzle_id):
         """Can this player see / answer this puzzle right now? Returns (window, submitted set)."""
@@ -112,6 +121,30 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
                     (pid, body.name.strip(), _hash(token), now()))
         return {"participant_id": pid, "name": body.name.strip(), "token": token}
 
+    @app.post("/api/session/demo", status_code=201)
+    def create_demo_session(con=Depends(db)):
+        """A throwaway player on a fast clock, for the 60-second walkthrough. Its clock starts at once,
+        it never appears on the leaderboard, and only it can ask the server for answers (see below)."""
+        token = secrets.token_urlsafe(32)
+        pid = "DEMO-" + uuid.uuid4().hex[:6].upper()
+        con.execute("INSERT INTO participants (id,name,token_hash,created_at,t0,is_demo,time_scale) VALUES (?,?,?,?,?,1,?)",
+                    (pid, "Demo Detective", _hash(token), now(), now(), cfg.demo_scale))
+        return {"participant_id": pid, "name": "Demo Detective", "token": token}
+
+    @app.get("/api/demo/answer/{puzzle_id}")
+    def demo_answer(puzzle_id: str, p=Depends(player), con=Depends(db)):
+        """The autopilot's answer for one puzzle. Demo sessions only, and only once that puzzle is unlocked,
+        so a real player's browser can never obtain the key this way."""
+        if not p["is_demo"]:
+            raise HTTPException(403, "Only available in the demo.")
+        if puzzle_id == "accusation":
+            ws = wins(p)
+            if not game.sections_closed(ws, submitted_ids(con, p["id"]), ids, now()):
+                raise HTTPException(423, "Not yet.")
+            return {"answer": secret["killer"]}
+        gate(p, con, puzzle_id)
+        return {"answer": secret["answers"][puzzle_id]["accepted"][0]}
+
     @app.post("/api/clock/start")
     def start_clock(p=Depends(player), con=Depends(db)):
         # Idempotent: the first call wins, so reloading the briefing never restarts the clock.
@@ -130,18 +163,18 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
         acc = con.execute("SELECT suspect_id, recorded_at FROM accusations WHERE participant_id=?", (p["id"],)).fetchone()
         return {
             "server_time": now(),
-            "participant": {"id": p["id"], "name": p["name"]},
+            "participant": {"id": p["id"], "name": p["name"], "demo": bool(p["is_demo"])},
             "clock": None if ws is None else {
                 "t0": p["t0"],
                 "reading_ends": ws[0].open,
                 "sections": [{"id": w.id, "open": w.open, "close": w.close} for w in ws],
             },
-            "rules": {"hint_delay_s": cfg.hint_delay_min * 60 * cfg.time_scale, "hint_penalty_s": cfg.hint_penalty_s},
+            "rules": {"hint_delay_s": cfg.hint_delay_min * 60 * scale(p), "hint_penalty_s": cfg.hint_penalty_s},
             # metadata only: prompts are fetched one at a time, once unlocked
             "puzzles": [{k: q.get(k) for k in ("id", "case", "title", "requires", "unlock_order", "hint_available")} for q in public],
             "submissions": subs, "hints": hints, "opened": opened,
             "accusation": dict(acc) if acc else None,
-            "results_released": released(con),
+            "results_released": released_for(p, con),
         }
 
     # ------------------------------------------------------------ puzzles
@@ -181,7 +214,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
             if body.puzzle_id in done or not game.is_open(w, now()):
                 raise HTTPException(410, "Hints are only available while the part is open.")
             opened = con.execute("SELECT opened_at FROM puzzle_opens WHERE participant_id=? AND puzzle_id=?", (p["id"], body.puzzle_id)).fetchone()
-            if not opened or now() < opened[0] + cfg.hint_delay_min * 60 * cfg.time_scale:
+            if not opened or now() < opened[0] + cfg.hint_delay_min * 60 * scale(p):
                 raise HTTPException(425, "The hint isn't available yet.")
             con.execute("INSERT INTO hints VALUES (?,?,?)", (p["id"], body.puzzle_id, now()))
             used = (now(),)
@@ -203,22 +236,27 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
             raise HTTPException(409, "Your accusation is already recorded.")
         return {"status": "recorded", "recorded_at": now()}
 
-    def scoreboard(con) -> list[dict]:
+    def scoreboard(con, include_id=None) -> list[dict]:
         rows = []
-        for p in con.execute("SELECT * FROM participants WHERE t0 IS NOT NULL"):
+        for p in con.execute("SELECT * FROM participants WHERE t0 IS NOT NULL AND (is_demo=0 OR id=?)", (include_id,)):
             ws = {w.id: w for w in wins(p)}
             subs = con.execute("SELECT puzzle_id, correct, recorded_at FROM submissions WHERE participant_id=?", (p["id"],)).fetchall()
             right = {s["puzzle_id"] for s in subs if s["correct"]}
             n_hints = con.execute("SELECT COUNT(*) FROM hints WHERE participant_id=?", (p["id"],)).fetchone()[0]
             acc = con.execute("SELECT correct FROM accusations WHERE participant_id=?", (p["id"],)).fetchone()
-            elapsed = sum(s["recorded_at"] - ws[game.detective_of(s["puzzle_id"])].open for s in subs)
+            # time to finish each case: from that case opening to its last answer (each case counted once)
+            finished = {}
+            for s in subs:
+                d = game.detective_of(s["puzzle_id"])
+                finished[d] = max(finished.get(d, 0), s["recorded_at"] - ws[d].open)
+            elapsed = sum(finished.values())
             rows.append({
                 "participant_id": p["id"], "name": p["name"],
                 "correct_answers": len(right),
                 "cases_cleared": sum(all(q in right for q in ids if game.detective_of(q) == d) for d in game.DETECTIVES),
                 "accusation_correct": int(bool(acc and acc["correct"])),
                 "hints_used": n_hints,
-                "total_time_s": round(elapsed / cfg.time_scale + n_hints * cfg.hint_penalty_s, 1),
+                "total_time_s": round(elapsed / scale(p) + n_hints * cfg.hint_penalty_s, 1),   # in event minutes, whatever the speed
             })
         rows.sort(key=game.rank_key)
         for i, r in enumerate(rows, 1):
@@ -227,9 +265,9 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
 
     @app.get("/api/results")
     def results(p=Depends(player), con=Depends(db)):
-        if not released(con):
+        if not released_for(p, con):
             raise HTTPException(423, "Results are sealed until the reveal.")
-        board = scoreboard(con)
+        board = scoreboard(con, include_id=p["id"] if p["is_demo"] else None)
         me = next((r for r in board if r["participant_id"] == p["id"]), None)
         mine = {r["puzzle_id"]: bool(r["correct"]) for r in con.execute(
             "SELECT puzzle_id, correct FROM submissions WHERE participant_id=?", (p["id"],))}
@@ -247,7 +285,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "time_scale": cfg.time_scale}
+        return {"status": "ok", "time_scale": cfg.time_scale, "demo_scale": cfg.demo_scale}
 
     # ------------------------------------------------------------ frontend
     # Only the frontend folder is served. backend/data (the answer key) is never reachable over HTTP.

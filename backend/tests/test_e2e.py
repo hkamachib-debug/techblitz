@@ -136,3 +136,29 @@ def test_full_event(server):
 
     assert errors == [], errors
     assert leaks == [], leaks
+
+
+def test_sixty_second_demo(server):
+    """A visitor clicks the demo button and watches a full round. It must finish in about a minute,
+    leave the visitor's own session alone, and stay off the real leaderboard."""
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(server + "/")
+        start = time.time()
+        page.click(".demo-btn")
+        page.wait_for_selector("#db-play", timeout=120000)          # "Your turn?" end screen
+        took = time.time() - start
+        assert 45 <= took <= 90, f"demo took {took:.0f}s"
+        panel = page.inner_text(".res-sealed")
+        assert "Dr. Sam Whitley" in panel and "8 of 8" in panel
+        assert page.evaluate("localStorage.getItem('tb_token')") is None   # demo session never stored
+        page.click("#db-play")
+        page.wait_for_selector("#ci-name")                                  # back to a normal check-in
+        browser.close()
+    assert errors == [], errors
+    req = urllib.request.Request(server + "/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN})
+    names = [p["name"] for p in json.loads(urllib.request.urlopen(req).read())["players"]]
+    assert "Demo Detective" not in names
