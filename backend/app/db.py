@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS participants (
     created_at  REAL NOT NULL,
     t0          REAL,                     -- case clock start (epoch seconds), set once
     is_demo     INTEGER NOT NULL DEFAULT 0,
-    time_scale  REAL                      -- per-player clock speed (demo sessions); NULL = server default
+    time_scale  REAL,                     -- per-player clock speed (demo sessions); NULL = server default
+    is_practice INTEGER NOT NULL DEFAULT 0  -- no-timer round: every case open, off the leaderboard
 );
 CREATE TABLE IF NOT EXISTS puzzle_opens (
     participant_id TEXT NOT NULL REFERENCES participants(id),
@@ -56,6 +57,8 @@ def init_db(path: str) -> None:
             con.execute("ALTER TABLE participants ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
         if "time_scale" not in cols:
             con.execute("ALTER TABLE participants ADD COLUMN time_scale REAL")
+        if "is_practice" not in cols:
+            con.execute("ALTER TABLE participants ADD COLUMN is_practice INTEGER NOT NULL DEFAULT 0")
 
 
 @contextmanager

@@ -186,3 +186,48 @@ def test_demo_survives_a_slow_connection(server):
         assert "closed before" not in page.inner_text("#demo-bar")
         browser.close()
     assert errors == [], errors
+
+
+def test_no_timer_round(server):
+    """'Play without a timer': every case is open at once, no countdowns, hints straight away, and the
+    result is revealed as soon as the player accuses. It never joins the event leaderboard."""
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(server + "/")
+        page.click("text=Play without a timer")
+        assert page.is_checked('input[name="ci-mode"][value="practice"]')
+        page.fill("#ci-name", "Recruiter")
+        page.click("#ci-go")
+        page.wait_for_url("**/#/briefing")
+        assert "No timer" in page.inner_text(".side")
+
+        # the last case first: nothing waits on a clock
+        page.goto(server + "/#/challenge/lisbon-a")
+        page.wait_for_selector("#ans:not([readonly])", timeout=5000)
+        assert "Case closes in" not in page.inner_text(".ws-center")
+        page.click("#hint"); page.click("#confirm-hint"); page.wait_for_selector(".hint-text")
+
+        for pid, ans in ANSWERS.items():
+            page.goto(server + "/#/challenge/" + pid)
+            page.wait_for_selector("#ans:not([readonly])", timeout=5000)
+            if pid == "cho-a":
+                page.fill("#ans", ans[0]); page.fill("#ans-m", ans[1])
+            else:
+                page.fill("#ans", ans)
+            page.click("#submit"); page.click("#confirm-sub")
+            page.wait_for_selector("#rcpt", timeout=5000)
+
+        page.goto(server + "/#/final-deduction")
+        page.wait_for_selector(".pick", timeout=5000)
+        page.click('.pick label:has-text("Dr. Sam Whitley")'); page.click("#review"); page.click("#confirm")
+        page.wait_for_selector(".reveal-line", timeout=10000)                 # no organizer release needed
+        panel = page.inner_text(".res-sealed")
+        assert "Practice, no timer" in panel and "8 of 8" in panel and "Correct" in panel
+        browser.close()
+    assert errors == [], errors
+    req = urllib.request.Request(server + "/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN})
+    names = [p["name"] for p in json.loads(urllib.request.urlopen(req).read())["players"]]
+    assert "Recruiter" not in names

@@ -43,6 +43,9 @@ class ReleaseIn(BaseModel):
     released: bool
 
 
+PRACTICE_OPEN_S = 10 * 365 * 24 * 3600   # a practice round's cases stay open (ten years is "forever" here)
+
+
 def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
     cfg = settings or load_settings()
     init_db(cfg.db_path)
@@ -79,12 +82,16 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
         return p["time_scale"] or cfg.time_scale
 
     def hint_delay_s(p) -> float:
+        if p["is_practice"]:
+            return 0.0
         minutes = cfg.demo_hint_delay_min if p["is_demo"] else cfg.hint_delay_min
         return minutes * 60 * scale(p)
 
     def wins(p):
         if p["t0"] is None:
             return None
+        if p["is_practice"]:   # no timer: every case is open from the start and never closes
+            return [game.Window(d, p["t0"], p["t0"] + PRACTICE_OPEN_S) for d in game.DETECTIVES]
         return game.windows(p["t0"], cfg.reading_min, cfg.section_min, scale(p))
 
     def submitted_ids(con, pid) -> set[str]:
@@ -95,8 +102,8 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
         return bool(r and r[0] == "1")
 
     def released_for(p, con) -> bool:
-        # A demo reveals its own result as soon as it accuses; real players wait for the organizers.
-        if p["is_demo"]:
+        # Demo and practice rounds reveal their own result as soon as they accuse; real players wait for the organizers.
+        if p["is_demo"] or p["is_practice"]:
             return con.execute("SELECT 1 FROM accusations WHERE participant_id=?", (p["id"],)).fetchone() is not None
         return released(con)
 
@@ -135,6 +142,16 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
                     (pid, "Demo Detective", _hash(token), now(), now(), cfg.demo_scale))
         return {"participant_id": pid, "name": "Demo Detective", "token": token}
 
+    @app.post("/api/session/practice", status_code=201)
+    def create_practice_session(body: SessionIn, con=Depends(db)):
+        """A no-timer round: every case is open at once, hints need no wait, the result is revealed as soon
+        as the player accuses, and the round never appears on the event leaderboard."""
+        token = secrets.token_urlsafe(32)
+        pid = "PR-" + uuid.uuid4().hex[:6].upper()
+        con.execute("INSERT INTO participants (id,name,token_hash,created_at,t0,is_practice) VALUES (?,?,?,?,?,1)",
+                    (pid, body.name.strip(), _hash(token), now(), now()))
+        return {"participant_id": pid, "name": body.name.strip(), "token": token}
+
     @app.get("/api/demo/answer/{puzzle_id}")
     def demo_answer(puzzle_id: str, p=Depends(player), con=Depends(db)):
         """The autopilot's answer for one puzzle. Demo sessions only, and only once that puzzle is unlocked,
@@ -167,7 +184,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
         acc = con.execute("SELECT suspect_id, recorded_at FROM accusations WHERE participant_id=?", (p["id"],)).fetchone()
         return {
             "server_time": now(),
-            "participant": {"id": p["id"], "name": p["name"], "demo": bool(p["is_demo"])},
+            "participant": {"id": p["id"], "name": p["name"], "demo": bool(p["is_demo"]), "practice": bool(p["is_practice"])},
             "clock": None if ws is None else {
                 "t0": p["t0"],
                 "reading_ends": ws[0].open,
@@ -242,7 +259,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
 
     def scoreboard(con, include_id=None) -> list[dict]:
         rows = []
-        for p in con.execute("SELECT * FROM participants WHERE t0 IS NOT NULL AND (is_demo=0 OR id=?)", (include_id,)):
+        for p in con.execute("SELECT * FROM participants WHERE t0 IS NOT NULL AND ((is_demo=0 AND is_practice=0) OR id=?)", (include_id,)):
             ws = {w.id: w for w in wins(p)}
             subs = con.execute("SELECT puzzle_id, correct, recorded_at FROM submissions WHERE participant_id=?", (p["id"],)).fetchall()
             right = {s["puzzle_id"] for s in subs if s["correct"]}
@@ -254,6 +271,8 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
                 d = game.detective_of(s["puzzle_id"])
                 finished[d] = max(finished.get(d, 0), s["recorded_at"] - ws[d].open)
             elapsed = sum(finished.values())
+            if p["is_practice"] and subs:   # cases run side by side here, so time is start to last answer
+                elapsed = max(s["recorded_at"] for s in subs) - p["t0"]
             rows.append({
                 "participant_id": p["id"], "name": p["name"],
                 "correct_answers": len(right),
@@ -271,7 +290,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
     def results(p=Depends(player), con=Depends(db)):
         if not released_for(p, con):
             raise HTTPException(423, "Results are sealed until the reveal.")
-        board = scoreboard(con, include_id=p["id"] if p["is_demo"] else None)
+        board = scoreboard(con, include_id=p["id"] if (p["is_demo"] or p["is_practice"]) else None)
         me = next((r for r in board if r["participant_id"] == p["id"]), None)
         mine = {r["puzzle_id"]: bool(r["correct"]) for r in con.execute(
             "SELECT puzzle_id, correct FROM submissions WHERE participant_id=?", (p["id"],))}

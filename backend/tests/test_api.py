@@ -263,6 +263,46 @@ def test_demo_reveals_its_own_result_but_stays_off_the_leaderboard(env):
     assert [p["name"] for p in board] == ["Real Player"]
 
 
+# ---------------------------------------------------------------- no-timer practice round
+ANSWERS = {"cho-a": "9:43", "cho-b": "workshop", "rigsby-a": "radio room", "rigsby-b": "till ten",
+           "van-pelt-a": "nonstop", "van-pelt-b": "ice rink", "lisbon-a": "5", "lisbon-b": "4"}
+
+
+def practice(client, name="Pat"):
+    r = client.post("/api/session/practice", json={"name": name})
+    assert r.status_code == 201
+    return {"Authorization": "Bearer " + r.json()["token"]}
+
+
+def test_practice_opens_every_case_at_once_with_no_wait(env):
+    client, clock = env
+    h = practice(client)
+    s = client.get("/api/state", headers=h).json()
+    assert s["participant"]["practice"] is True and s["rules"]["hint_delay_s"] == 0
+    assert client.get("/api/puzzles/lisbon-a", headers=h).status_code == 200      # the last case, straight away
+    assert client.get("/api/puzzles/lisbon-b", headers=h).status_code == 423      # Part B still follows Part A
+    assert client.post("/api/hints", headers=h, json={"puzzle_id": "lisbon-a"}).status_code == 201   # no hint wait
+    assert client.get("/api/demo/answer/cho-a", headers=h).status_code == 403     # never the answer key
+
+
+def test_practice_never_runs_out_of_time_and_stays_off_the_leaderboard(env):
+    client, clock = env
+    real = started(client, clock, "Real Player")
+    h = practice(client, "Pat")
+    clock.advance(24 * 60)                                                         # a day later: still open
+    assert client.post("/api/accusation", headers=h, json={"suspect_id": "sam"}).status_code == 423   # not every case is in
+    for pid, ans in ANSWERS.items():
+        client.get(f"/api/puzzles/{pid}", headers=h)
+        assert client.post("/api/submissions", headers=h, json={"puzzle_id": pid, "submitted_answer": ans}).status_code == 201
+    assert client.post("/api/accusation", headers=h, json={"suspect_id": "sam"}).status_code == 201
+    me = client.get("/api/results", headers=h).json()["you"]                       # revealed at once
+    assert me["correct_answers"] == 8 and me["accusation_correct"] == 1
+    assert me["total_time_s"] == 24 * 60 * 60                                        # start to last answer, cases not double-counted
+    assert client.get("/api/results", headers=real).status_code == 423              # real results still sealed
+    board = client.get("/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN}).json()["players"]
+    assert "Pat" not in [p["name"] for p in board]
+
+
 def test_existing_database_is_upgraded_in_place(tmp_path):
     """A database created by the earlier version (no demo columns) keeps its players and gains demo support."""
     import sqlite3

@@ -648,6 +648,14 @@ body[data-tex="epilogue"]{ --grain:.075; --scratch:.06; background:#060607; }
 .ci-card{ width:min(520px,100%); border:1px solid var(--line); background:var(--charcoal); padding:clamp(1.4rem,4vw,2.4rem); }
 .ci-card h1{ font-size:clamp(2.6rem,6vw,3.6rem); margin:.6rem 0 .8rem; }
 .ci-card p{ color:#C9C7C1; }
+.mode-pick{ border:0; margin:0 0 1.2rem; padding:0; display:grid; gap:.6rem; }
+.mode-pick legend{ font-size:.9rem; margin-bottom:.5rem; }
+.mode-pick label{ display:flex; gap:.8rem; align-items:flex-start; border:1px solid var(--line); background:var(--obsidian); padding:.85rem 1rem; cursor:pointer; }
+.mode-pick label:has(input:checked){ border-color:var(--amber); }
+.mode-pick input{ margin-top:.25rem; accent-color:var(--amber); width:1.05rem; height:1.05rem; flex:none; }
+.mode-pick strong{ display:block; font-weight:600; }
+.mode-pick small{ display:block; color:#A9A7A1; font-size:.86rem; margin-top:.15rem; line-height:1.45; }
+.hero-cta .practice-link{ white-space:nowrap; }
 .flash{ display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; border:1px solid var(--red); background:rgba(184,39,45,.1); padding:.7rem 1rem; margin-bottom:1.6rem; }
 .signed-in{ font-size:.74rem; line-height:1.5; margin:0; }
 .signed-in strong{ color:var(--paper); font-weight:500; }
@@ -867,6 +875,7 @@ const API = {
   accuse(p){ return API.call('POST', '/api/accusation', { suspect_id:p.suspect_id }); },
   results(){ return API.call('GET', '/api/results'); },
   demoSession(){ return API.call('POST', '/api/session/demo'); },
+  practiceSession(name){ return API.call('POST', '/api/session/practice', { name }); },
   demoAnswer(id){ return API.call('GET', '/api/demo/answer/' + encodeURIComponent(id)); }
 };
 const store = {   // the session token survives reloads; storage can be blocked, so every access is guarded
@@ -920,6 +929,7 @@ const topicOf = p => (p.case.match(/\(([^)]+)\)/) || [null, ''])[1];
 const detIndex = id => DATA.detectives.findIndex(d => d.id === id);
 // Case N opens once every part of case N-1 is submitted (never on correctness).
 const now = () => Date.now() + S.offset;   // server time
+const practice = () => !!S.me?.practice;     // no-timer round: every case open, no countdowns
 // The schedule comes from the server: reading, then each case's window back to back.
 function windows(){ return S.clock ? S.clock.sections : null; }
 const win = id => (windows() || []).find(w => w.id === id);
@@ -958,6 +968,7 @@ function fieldCard(d, size=''){
 function clockState(){
   const ws = windows(), t = now();
   if(!ws) return { label:'Case clock', msg:'Starts when you open 01 Case briefing.' };
+  if(practice()) return { label:'No timer', msg: sectionsDone() ? 'All four cases are in. The final deduction is open.' : 'Practice round: every case is open. Take your time.' };
   if(sectionsDone()) return { label:'Case clock', msg:'All four cases are closed.' };
   if(t < ws[0].open) return { label:'Reading time', from:S.clock.t0, ts:ws[0].open, msg:"Cho's case opens when this ends." };
   const cur = ws.find(w => t >= w.open && t < w.close);
@@ -1023,6 +1034,7 @@ function landing(){
         <div class="hero-cta">
           <a class="btn btn-red" href="#/briefing">${e.ctaPrimary}</a>
           <button class="btn btn-ghost demo-btn" type="button">Watch a 60-second demo</button>
+          <a class="link practice-link" href="#/practice">Play without a timer</a>
           <a class="link" href="#/suspects">${e.ctaSecondary}</a>
         </div>
       </div>
@@ -1240,7 +1252,7 @@ function nextAction(p, next){
   if(sectionsDone()) return verdictPanel();
   const d = det(detOf(p)), nd = DATA.detectives[detIndex(d.id)+1];
   if(nd && chOf(d.id).every(x => S.subs[x.id])){
-    if(detUnlocked(nd.id)) return act(`<a class="btn btn-red" href="#/investigation/${nd.id}">${nd.name} is back. Open ${nd.name}'s case</a>`);
+    if(detUnlocked(nd.id)) return act(`<a class="btn btn-red" href="#/investigation/${nd.id}">${practice() ? `Next: ${nd.name}'s case` : `${nd.name} is back. Open ${nd.name}'s case`}</a>`);
     return `<p class="wait">${d.name}'s case is in. ${nd.name} is back in ${until(win(nd.id).open)}. Use the time to look over the <a class="link" href="#/evidence">evidence</a> and the <a class="link" href="#/suspects">suspects</a>.</p>`;
   }
   return act(`<a class="btn btn-ghost" href="#/investigation">Back to the investigation</a>`);
@@ -1297,7 +1309,7 @@ function workspace(id){
       <ol>${DATA.detectives.filter(x => x.id !== d.id).map(x => `<li><a href="#/investigation/${x.id}"><span class="n">${x.name[0]}</span><span>${x.name}</span></a></li>`).join('')}</ol>
     </nav>
     <section class="ws-center" aria-labelledby="ws-title">
-      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap"><span class="mono muted">Question ${pad(idx(p))} of ${PUZZLES.length}</span><span class="mono muted">${esc(p.case)}</span>${(s==='available'||s==='locked') && win(d.id) ? `<span class="mono sec-cd">Case closes in ${until(win(d.id).close)}</span>` : ''}</div>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap"><span class="mono muted">Question ${pad(idx(p))} of ${PUZZLES.length}</span><span class="mono muted">${esc(p.case)}</span>${(s==='available'||s==='locked') && win(d.id) && !practice() ? `<span class="mono sec-cd">Case closes in ${until(win(d.id).close)}</span>` : ''}</div>
       <h1 id="ws-title">${d.name}, ${p.title}</h1>
       ${main}
     </section>
@@ -1670,7 +1682,7 @@ function resultsPanel(){
   const r = S.results, y = r.you, k = sus(r.killer);
   if(!y) return `<p>The killer was <strong>${esc(k.name)}</strong>. You didn't start the case clock, so you aren't ranked.</p>`;
   return `<p class="reveal-line">The killer was <strong>${esc(k.name)}</strong>.</p>
-    <dl class="kv" style="margin:0"><dt>Your rank</dt><dd>${y.rank} of ${r.players}</dd>
+    <dl class="kv" style="margin:0">${practice() ? `<dt>Round</dt><dd>Practice, no timer</dd>` : `<dt>Your rank</dt><dd>${y.rank} of ${r.players}</dd>`}
     <dt>Accusation</dt><dd>${y.accusation_correct ? 'Correct' : 'Incorrect'}</dd>
     <dt>Cases cleared</dt><dd>${y.cases_cleared} of 4</dd>
     <dt>Correct answers</dt><dd>${y.correct_answers} of ${PUZZLES.length}</dd>
@@ -1699,12 +1711,17 @@ function results(){
   ${epilogueEntry()}`);
 }
 
-function checkIn(){
+function checkIn(mode = 'timed'){
+  const opt = (v, title, sub) => `<label><input type="radio" name="ci-mode" value="${v}" ${mode === v ? 'checked' : ''}><span><strong>${title}</strong><small>${sub}</small></span></label>`;
   return `<main id="main" class="checkin" tabindex="-1"><div class="ci-card">
     <div class="mono muted">${DATA.event.caseId} / ${DATA.event.caseTitle}</div>
     <h1 class="display">Consultant check-in</h1>
-    <p>Sign in with the name you want on the results board. Your answers are saved to the server as you go, so you can reload safely.</p>
+    <p>Sign in with your name. Your answers are saved to the server as you go, so you can reload safely.</p>
     <form id="ci-form" class="field" novalidate>
+      <fieldset class="mode-pick"><legend>How do you want to play?</legend>
+        ${opt('timed', 'Timed, like the real event', '70 minutes on the clock. Each detective returns when their time comes.')}
+        ${opt('practice', 'No timer', 'Every case open at once. Play at your own pace; your result shows as soon as you accuse.')}
+      </fieldset>
       <label for="ci-name">Your name</label>
       <input id="ci-name" class="input" autocomplete="name" maxlength="60" required>
       ${S.err === 'checkin' ? `<div class="err" id="ci-err" role="alert">${esc(S.errMsg || 'Type your name to check in.')}</div>` : ''}
@@ -1719,7 +1736,13 @@ function bindCheckIn(){
     const name = $('#ci-name').value.trim();
     if(!name){ S.err = 'checkin'; S.errMsg = null; render(); return; }
     $('#ci-go').disabled = true;
-    try { const r = await API.checkIn(name); S.token = r.token; store.set(r.token); S.err = null; await hydrate(); render(); }
+    const mode = $('input[name="ci-mode"]:checked')?.value || 'timed';
+    try {
+      const r = mode === 'practice' ? await API.practiceSession(name) : await API.checkIn(name);
+      resetSessionState(); S.token = r.token; store.set(r.token); S.err = null; await hydrate();
+      if(location.hash.startsWith('#/practice')) location.hash = '#/briefing';   // from the landing link: start at the case file
+      render();
+    }
     catch(err){ S.err = 'checkin'; S.errMsg = err.message; render(); }
   });
 }
@@ -1914,6 +1937,7 @@ function render(){
   let view, bind = () => {};
   if(!parts.length) view = landing();
   else if(!S.booted) view = `<main id="main" class="checkin" tabindex="-1"><p class="mono muted">Opening the case file…</p></main>`;
+  else if(parts[0]==='practice') { view = checkIn('practice'); bind = bindCheckIn; }
   else if(!S.token) { view = checkIn(); bind = bindCheckIn; }
   else if(parts[0]==='briefing') view = briefing();
   else if(parts[0]==='suspects') view = suspectsPage();
