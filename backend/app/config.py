@@ -16,6 +16,7 @@ class Settings:
     reading_min: float
     section_min: dict
     hint_delay_min: float
+    demo_hint_delay_min: float  # the demo's hint opens sooner so the whole round fits in a minute
     hint_penalty_s: int
     frontend_dir: Path
     data_dir: Path
@@ -31,6 +32,7 @@ def load_settings() -> Settings:
         # Cases open in this order, back to back, after the reading period.
         section_min={"cho": 15, "rigsby": 15, "van-pelt": 15, "lisbon": 20},
         hint_delay_min=5,
+        demo_hint_delay_min=1,
         hint_penalty_s=60,
         frontend_dir=Path(os.getenv("TB_FRONTEND_DIR", str(ROOT_DIR / "frontend"))),
         data_dir=BACKEND_DIR / "data",

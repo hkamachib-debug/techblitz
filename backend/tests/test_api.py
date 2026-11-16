@@ -223,6 +223,20 @@ def test_demo_runs_on_its_own_fast_clock(env):
     assert 50 <= total <= 70        # the whole 70-minute event in about a minute
 
 
+def test_demo_hint_opens_sooner_but_real_players_keep_five_minutes(env):
+    client, clock = env
+    d = demo(client)
+    s = client.get("/api/state", headers=d).json()
+    assert s["rules"]["hint_delay_s"] < 1.5                     # 1 demo minute, under a real second
+    clock.t += 5                                                # past the demo's reading time
+    client.get("/api/puzzles/cho-a", headers=d)                 # opening it starts the hint timer
+    assert client.post("/api/hints", headers=d, json={"puzzle_id": "cho-a"}).status_code == 425
+    clock.t += 1
+    assert client.post("/api/hints", headers=d, json={"puzzle_id": "cho-a"}).status_code == 201
+    real = started(client, clock)
+    assert client.get("/api/state", headers=real).json()["rules"]["hint_delay_s"] == 5 * 60   # unchanged for real rounds
+
+
 def test_demo_answers_only_for_demo_sessions_and_only_once_unlocked(env):
     client, clock = env
     real = started(client, clock)

@@ -78,6 +78,10 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
     def scale(p) -> float:
         return p["time_scale"] or cfg.time_scale
 
+    def hint_delay_s(p) -> float:
+        minutes = cfg.demo_hint_delay_min if p["is_demo"] else cfg.hint_delay_min
+        return minutes * 60 * scale(p)
+
     def wins(p):
         if p["t0"] is None:
             return None
@@ -169,7 +173,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
                 "reading_ends": ws[0].open,
                 "sections": [{"id": w.id, "open": w.open, "close": w.close} for w in ws],
             },
-            "rules": {"hint_delay_s": cfg.hint_delay_min * 60 * scale(p), "hint_penalty_s": cfg.hint_penalty_s},
+            "rules": {"hint_delay_s": hint_delay_s(p), "hint_penalty_s": cfg.hint_penalty_s},
             # metadata only: prompts are fetched one at a time, once unlocked
             "puzzles": [{k: q.get(k) for k in ("id", "case", "title", "requires", "unlock_order", "hint_available")} for q in public],
             "submissions": subs, "hints": hints, "opened": opened,
@@ -214,7 +218,7 @@ def create_app(settings: Settings | None = None, clock=time.time) -> FastAPI:
             if body.puzzle_id in done or not game.is_open(w, now()):
                 raise HTTPException(410, "Hints are only available while the part is open.")
             opened = con.execute("SELECT opened_at FROM puzzle_opens WHERE participant_id=? AND puzzle_id=?", (p["id"], body.puzzle_id)).fetchone()
-            if not opened or now() < opened[0] + cfg.hint_delay_min * 60 * scale(p):
+            if not opened or now() < opened[0] + hint_delay_s(p):
                 raise HTTPException(425, "The hint isn't available yet.")
             con.execute("INSERT INTO hints VALUES (?,?,?)", (p["id"], body.puzzle_id, now()))
             used = (now(),)

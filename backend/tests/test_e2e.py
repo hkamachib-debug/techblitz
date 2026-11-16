@@ -162,3 +162,27 @@ def test_sixty_second_demo(server):
     req = urllib.request.Request(server + "/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN})
     names = [p["name"] for p in json.loads(urllib.request.urlopen(req).read())["players"]]
     assert "Demo Detective" not in names
+
+
+def test_demo_survives_a_slow_connection(server):
+    """Regression: on a slow link (a hosted server far away) the demo used to stall at Lisbon's Part B,
+    because each request ate into a case's ~13-second window. Every API call is delayed here; the demo
+    must still lock in all eight answers and finish."""
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})     # a phone, as a LinkedIn visitor would
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+
+        def slow(route):
+            time.sleep(0.45)
+            route.continue_()
+        page.route("**/api/**", slow)
+        page.goto(server + "/")
+        page.click(".demo-btn")
+        page.wait_for_selector("#db-play", timeout=150000)
+        panel = page.inner_text(".res-sealed")
+        assert "8 of 8" in panel and "4 of 4" in panel, panel
+        assert "closed before" not in page.inner_text("#demo-bar")
+        browser.close()
+    assert errors == [], errors
