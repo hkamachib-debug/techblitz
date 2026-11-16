@@ -1,0 +1,209 @@
+diff -ruN pa/backend/app/config.py pb/backend/app/config.py
+--- a/backend/app/config.py	2026-11-16 16:11:30.828804058 +0000
++++ b/backend/app/config.py	2026-11-16 16:11:30.830884409 +0000
+@@ -16,6 +16,7 @@
+     reading_min: float
+     section_min: dict
+     hint_delay_min: float
++    demo_hint_delay_min: float  # the demo's hint opens sooner so the whole round fits in a minute
+     hint_penalty_s: int
+     frontend_dir: Path
+     data_dir: Path
+@@ -31,6 +32,7 @@
+         # Cases open in this order, back to back, after the reading period.
+         section_min={"cho": 15, "rigsby": 15, "van-pelt": 15, "lisbon": 20},
+         hint_delay_min=5,
++        demo_hint_delay_min=1,
+         hint_penalty_s=60,
+         frontend_dir=Path(os.getenv("TB_FRONTEND_DIR", str(ROOT_DIR / "frontend"))),
+         data_dir=BACKEND_DIR / "data",
+diff -ruN pa/backend/app/main.py pb/backend/app/main.py
+--- a/backend/app/main.py	2026-11-16 16:11:30.837268624 +0000
++++ b/backend/app/main.py	2026-11-16 16:11:30.839135460 +0000
+@@ -78,6 +78,10 @@
+     def scale(p) -> float:
+         return p["time_scale"] or cfg.time_scale
+ 
++    def hint_delay_s(p) -> float:
++        minutes = cfg.demo_hint_delay_min if p["is_demo"] else cfg.hint_delay_min
++        return minutes * 60 * scale(p)
++
+     def wins(p):
+         if p["t0"] is None:
+             return None
+@@ -169,7 +173,7 @@
+                 "reading_ends": ws[0].open,
+                 "sections": [{"id": w.id, "open": w.open, "close": w.close} for w in ws],
+             },
+-            "rules": {"hint_delay_s": cfg.hint_delay_min * 60 * scale(p), "hint_penalty_s": cfg.hint_penalty_s},
++            "rules": {"hint_delay_s": hint_delay_s(p), "hint_penalty_s": cfg.hint_penalty_s},
+             # metadata only: prompts are fetched one at a time, once unlocked
+             "puzzles": [{k: q.get(k) for k in ("id", "case", "title", "requires", "unlock_order", "hint_available")} for q in public],
+             "submissions": subs, "hints": hints, "opened": opened,
+@@ -214,7 +218,7 @@
+             if body.puzzle_id in done or not game.is_open(w, now()):
+                 raise HTTPException(410, "Hints are only available while the part is open.")
+             opened = con.execute("SELECT opened_at FROM puzzle_opens WHERE participant_id=? AND puzzle_id=?", (p["id"], body.puzzle_id)).fetchone()
+-            if not opened or now() < opened[0] + cfg.hint_delay_min * 60 * scale(p):
++            if not opened or now() < opened[0] + hint_delay_s(p):
+                 raise HTTPException(425, "The hint isn't available yet.")
+             con.execute("INSERT INTO hints VALUES (?,?,?)", (p["id"], body.puzzle_id, now()))
+             used = (now(),)
+diff -ruN pa/backend/tests/test_api.py pb/backend/tests/test_api.py
+--- a/backend/tests/test_api.py	2026-11-16 16:11:30.846185328 +0000
++++ b/backend/tests/test_api.py	2026-11-16 16:11:30.847628286 +0000
+@@ -223,6 +223,20 @@
+     assert 50 <= total <= 70        # the whole 70-minute event in about a minute
+ 
+ 
++def test_demo_hint_opens_sooner_but_real_players_keep_five_minutes(env):
++    client, clock = env
++    d = demo(client)
++    s = client.get("/api/state", headers=d).json()
++    assert s["rules"]["hint_delay_s"] < 1.5                     # 1 demo minute, under a real second
++    clock.t += 5                                                # past the demo's reading time
++    client.get("/api/puzzles/cho-a", headers=d)                 # opening it starts the hint timer
++    assert client.post("/api/hints", headers=d, json={"puzzle_id": "cho-a"}).status_code == 425
++    clock.t += 1
++    assert client.post("/api/hints", headers=d, json={"puzzle_id": "cho-a"}).status_code == 201
++    real = started(client, clock)
++    assert client.get("/api/state", headers=real).json()["rules"]["hint_delay_s"] == 5 * 60   # unchanged for real rounds
++
++
+ def test_demo_answers_only_for_demo_sessions_and_only_once_unlocked(env):
+     client, clock = env
+     real = started(client, clock)
+diff -ruN pa/backend/tests/test_e2e.py pb/backend/tests/test_e2e.py
+--- a/backend/tests/test_e2e.py	2026-11-16 16:11:30.854099488 +0000
++++ b/backend/tests/test_e2e.py	2026-11-16 16:11:30.855706808 +0000
+@@ -162,3 +162,27 @@
+     req = urllib.request.Request(server + "/api/admin/leaderboard", headers={"X-Admin-Key": ADMIN})
+     names = [p["name"] for p in json.loads(urllib.request.urlopen(req).read())["players"]]
+     assert "Demo Detective" not in names
++
++
++def test_demo_survives_a_slow_connection(server):
++    """Regression: on a slow link (a hosted server far away) the demo used to stall at Lisbon's Part B,
++    because each request ate into a case's ~13-second window. Every API call is delayed here; the demo
++    must still lock in all eight answers and finish."""
++    with playwright.sync_playwright() as p:
++        browser = p.chromium.launch()
++        page = browser.new_page(viewport={"width": 390, "height": 844})     # a phone, as a LinkedIn visitor would
++        errors = []
++        page.on("pageerror", lambda e: errors.append(str(e)))
++
++        def slow(route):
++            time.sleep(0.45)
++            route.continue_()
++        page.route("**/api/**", slow)
++        page.goto(server + "/")
++        page.click(".demo-btn")
++        page.wait_for_selector("#db-play", timeout=150000)
++        panel = page.inner_text(".res-sealed")
++        assert "8 of 8" in panel and "4 of 4" in panel, panel
++        assert "closed before" not in page.inner_text("#demo-bar")
++        browser.close()
++    assert errors == [], errors
+diff -ruN pa/frontend/index.html pb/frontend/index.html
+--- a/frontend/index.html	2026-11-16 16:11:30.862843815 +0000
++++ b/frontend/index.html	2026-11-16 16:11:30.865007991 +0000
+@@ -1730,7 +1730,7 @@
+    same buttons a player would. The server gives the demo its own fast clock (~1 minute for the 70-minute
+    event), keeps it off the leaderboard, and hands it each answer only once that puzzle has unlocked.
+    The demo's session lives in memory only: stopping or reloading returns to the visitor's own session. */
+-const DEMO = { running:false, aborted:false, typeMs:75 };
++const DEMO = { running:false, aborted:false, typeMs:75, deadline:0 };
+ const ABORT = new Error('demo stopped');
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+ async function pause(ms){ await sleep(ms); if(DEMO.aborted) throw ABORT; }
+@@ -1739,6 +1739,7 @@
+   for(;;){
+     if(DEMO.aborted) throw ABORT;
+     const v = test(); if(v) return v;
++    if(DEMO.deadline && now() > DEMO.deadline + 400) throw new Error('The case closed.');
+     if(Date.now() > end) throw new Error('The demo lost its place.');
+     await sleep(100);
+   }
+@@ -1770,14 +1771,15 @@
+   if(progress != null) bar.querySelector('.db-meter i').style.width = Math.round(progress * 100) + '%';
+   bar.querySelector('.db-actions').innerHTML = `<button type="button" class="btn btn-ghost" id="db-stop">Stop demo</button>`;
+   bar.querySelector('#db-stop').onclick = () => stopDemo('#/');
++  document.documentElement.style.scrollPaddingBottom = (bar.offsetHeight + 16) + 'px';   // what the autopilot shows stays above the caption bar
+ }
+ function resetSessionState(){
+   Object.assign(S, { subs:{}, opened:{}, hints:{}, content:{}, pending:{}, pendingTime:{}, accusation:null, results:null,
+     released:false, clock:null, pick:null, seen:{}, err:null, errMsg:null, flash:null, me:null });
+ }
+ async function stopDemo(hash){
+-  DEMO.aborted = true; DEMO.running = false;
+-  document.getElementById('demo-bar')?.remove(); document.body.classList.remove('demo-on');
++  DEMO.aborted = true; DEMO.running = false; DEMO.deadline = 0;
++  document.getElementById('demo-bar')?.remove(); document.body.classList.remove('demo-on'); document.documentElement.style.scrollPaddingBottom = '';
+   if($('#dlg').open) closeDialog();
+   resetSessionState(); S.token = store.get();      // back to the visitor's own session, if they had one
+   if(S.token) await hydrate().catch(() => { S.token = null; });
+@@ -1821,26 +1823,49 @@
+       await go('#/investigation/' + d.id);
+       await waitFor(() => now() >= w.open + 150, 60000);
+     }
+-    for(const part of chOf(d.id)){
++    // The demo's clock is real: on a slow connection the pauses shrink so each answer lands before its case closes.
++    const parts = chOf(d.id);
++    DEMO.deadline = w.close;
++    const hurry = left => Math.max(.25, Math.min(1, (w.close - now() - 1500) / (left * 5200)));
++    const beat = (ms, left) => pause(Math.round(ms * hurry(left)));
++    for(const [i, part] of parts.entries()){
++      const left = parts.length - i;
+       caption(say('read', `${d.name}, ${part.title}: read the puzzle. Its text was just fetched from the server, because it has unlocked.`,
+         `${d.name}'s case (${topicOf(part)}), ${part.title}.`), progress());
+       await go('#/challenge/' + part.id);
+-      await waitFor(() => $('#ans:not([readonly])'));
+-      reveal($('.prompt')); await pause(1300);
+-      if(part.id === 'lisbon-a'){
+-        caption('Stuck? One hint per part. It unlocks 5 minutes after opening the puzzle and adds 60 seconds to your time.', progress());
+-        await waitFor(() => $('#hint:not([disabled])'), 20000);
+-        await press('#hint'); await waitFor(() => $('#dlg').open); await pause(600);
+-        await press('#confirm-hint'); await waitFor(() => $('.hint-text')); reveal($('.hint-text')); await pause(1800);
++      if(!await waitFor(() => $('#ans:not([readonly])') || (now() > w.close && 'late'), 60000) || now() > w.close) break;
++      try {
++        const answerReady = API.demoAnswer(part.id);       // fetched while the puzzle is on screen
++        answerReady.catch(() => {});                       // if the case closes first, nothing waits on it
++        reveal($('.prompt')); await beat(1300, left);
++        if(part.id === 'lisbon-a' && w.close - now() > 9000){
++          caption('Stuck? One hint per part. In a real round it unlocks 5 minutes after you open the puzzle (sooner in this demo) and adds 60 seconds to your time.', progress());
++          await waitFor(() => $('#hint:not([disabled])'), 20000);
++          await press('#hint'); await waitFor(() => $('#dlg').open); await beat(600, left);
++          await press('#confirm-hint'); await waitFor(() => $('.hint-text')); reveal($('.hint-text')); await beat(1800, left);
++        }
++        const { answer } = await answerReady;
++        caption(say('type', 'Type the answer in the expected format. Capitals don\'t matter; the server normalizes it.', 'Typing the answer…'), progress());
++        DEMO.typeMs = Math.round(75 * hurry(left));
++        if(fmtOf(part).kind === 'time'){ const [h, m] = answer.split(':'); await type('#ans', h); await type('#ans-m', m); }
++        else await type('#ans', answer.toLowerCase());
++        await press('#submit'); await waitFor(() => $('#dlg').open); await beat(800, left);
++        caption(say('lock', 'Confirm. The answer locks for good, and the screen never says whether it was right.', 'Locked in. No verdict until the end.'), progress());
++        await press('#confirm-sub');
++        const landed = await waitFor(() => ($('#rcpt') && 'ok') || (S.err === part.id && !S.sending && 'late'), 15000);
++        if(landed === 'late'){                              // the case closed first: the server refuses late answers, for the demo too
++          caption(`${d.name}'s case closed before that answer arrived. The server refuses late answers, even in the demo.`, progress());
++          await pause(1800); break;
++        }
++        reveal($('#rcpt')); await beat(1100, left);
++      } catch(e){                                        // the case closed mid-answer (a very slow connection)
++        if(e === ABORT || now() <= w.close) throw e;
++        if($('#dlg').open) closeDialog();
++        caption(`${d.name}'s case closed before that answer arrived. The server refuses late answers, even in the demo.`, progress());
++        await pause(1800); break;
+       }
+-      const { answer } = await API.demoAnswer(part.id);
+-      caption(say('type', 'Type the answer in the expected format. Capitals don\'t matter; the server normalizes it.', 'Typing the answer…'), progress());
+-      if(fmtOf(part).kind === 'time'){ const [h, m] = answer.split(':'); await type('#ans', h); await type('#ans-m', m); }
+-      else await type('#ans', answer.toLowerCase());
+-      await press('#submit'); await waitFor(() => $('#dlg').open); await pause(800);
+-      caption(say('lock', 'Confirm. The answer locks for good, and the screen never says whether it was right.', 'Locked in. No verdict until the end.'), progress());
+-      await press('#confirm-sub'); await waitFor(() => $('#rcpt')); reveal($('#rcpt')); await pause(1100);
+     }
++    DEMO.deadline = 0;
+   }
+ 
+   caption('All four cases are closed. One accusation, and it\'s final.', progress());

@@ -13,7 +13,7 @@ A timed, solo **technical murder-mystery** built for a university tech event. Pl
 ---
 ## Watch it in 60 seconds
 
-Click **Watch a 60-second demo** on the landing page. The server starts a throwaway demo session whose clock runs the whole 70-minute event in about a minute, and an autopilot plays it through the real interface: it reads the case file, waits for each detective to arrive, types answers at human speed, uses a hint, accuses, and opens the revealed results, with captions explaining each step. Demo sessions never appear on the leaderboard, and a visitor's own session is untouched.
+Click **Watch a 60-second demo** on the landing page. The server starts a throwaway demo session whose clock runs the whole 70-minute event in about a minute, and an autopilot plays it through the real interface: it reads the case file, waits for each detective to arrive, types answers at human speed, uses a hint, accuses, and opens the revealed results, with captions explaining each step. Demo sessions never appear on the leaderboard, and a visitor's own session is untouched. The demo's hint unlocks after 1 event-minute instead of 5, and if a slow connection makes an answer miss its case's window, the demo says so and carries on, just as the server would treat a real player.
 
 ## Why it's interesting
 
@@ -126,11 +126,11 @@ curl localhost:8000/api/admin/leaderboard -H "X-Admin-Key: secret"
 cd backend
 pip install -r requirements-dev.txt
 playwright install chromium
-pytest            #28 tests: API rules + two browser runs (~2.5 min)`
+pytest            #30 tests: API rules + three browser runs (~3.5 min)`
 ```
 
-- `tests/test_api.py` (26 tests) uses an **injected clock**, so time-based rules (windows, late submissions, hint delay) are tested instantly. It covers normalization, unlock order, lock-once (including 8 simultaneous submits), player isolation, hints, accusation, ssealed results, ranking and time scoring, demo sessions, upgrading an older database, and answer-key leak checks.
-- `tests/test_e2e.py` starts a real server at 50× speed and drives Chromium through the whole event: check-in, locked cases, hint, submit, **reload persistence**, every puzzle, accusation, admin release and results. It watches every API response for answer-key leaks. A second run clicks the demo button and checks it finishes in about a minute, never stores the demo session, and stays off the leaderboard.
+- `tests/test_api.py` (27 tests) uses an **injected clock**, so time-based rules (windows, late submissions, hint delay) are tested instantly. It covers normalization, unlock order, lock-once (including 8 simultaneous submits), player isolation, hints, accusation, ssealed results, ranking and time scoring, demo sessions, upgrading an older database, and answer-key leak checks.
+- `tests/test_e2e.py` starts a real server at 50× speed and drives Chromium through the whole event: check-in, locked cases, hint, submit, **reload persistence**, every puzzle, accusation, admin release and results. It watches every API response for answer-key leaks. A second run clicks the demo button and checks it finishes in about a minute, never stores the demo session, and stays off the leaderboard. A third run plays the demo on a phone-sized screen with every request slowed by 0.45 s and checks it still records all eight answers.
 
 ## Deploy (Render, free)
 
